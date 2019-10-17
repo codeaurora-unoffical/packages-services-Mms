@@ -22,20 +22,20 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.RemoteException;
+import android.provider.BlockedNumberContract;
 import android.provider.Telephony;
 import android.service.carrier.CarrierMessagingService;
 import android.service.carrier.ICarrierMessagingService;
 import android.telephony.CarrierMessagingServiceManager;
-import android.telephony.PhoneNumberUtils;
 import android.telephony.SmsManager;
+import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 
 import com.android.internal.telephony.AsyncEmergencyContactNotifier;
-import com.android.internal.telephony.Phone;
-import com.android.internal.telephony.PhoneFactory;
 import com.android.internal.telephony.SmsApplication;
 import com.android.internal.telephony.SmsNumberUtils;
 import com.android.mms.service.exception.MmsHttpException;
@@ -126,7 +126,19 @@ public class SendRequest extends MmsRequest {
             for (EncodedStringValue encodedStringValue : sendReq.getTo()) {
                 if (isEmergencyNumber(encodedStringValue.getString())) {
                     LogUtil.i(getRequestId(), "Notifying emergency contact");
-                    new AsyncEmergencyContactNotifier(mContext).execute();
+                    new AsyncTask<Void, Void, Void>() {
+                        @Override
+                        protected Void doInBackground(Void... voids) {
+                            try {
+                                BlockedNumberContract.SystemContract
+                                    .notifyEmergencyContact(mContext);
+                            } catch (Exception e) {
+                                LogUtil.e(getRequestId(),
+                                    "Exception notifying emergency contact: " + e);
+                            }
+                            return null;
+                        }
+                    }.execute();
                     return;
                 }
             }
@@ -134,7 +146,12 @@ public class SendRequest extends MmsRequest {
     }
 
     private boolean isEmergencyNumber(String address) {
-        return !TextUtils.isEmpty(address) && PhoneNumberUtils.isEmergencyNumber(mSubId, address);
+        if (!TextUtils.isEmpty(address)) {
+            TelephonyManager telephonyManager = ((TelephonyManager) mContext
+                .getSystemService(Context.TELEPHONY_SERVICE)).createForSubscriptionId(mSubId);
+            return telephonyManager.isEmergencyNumber(address);
+        }
+        return false;
     }
 
     @Override
@@ -278,13 +295,12 @@ public class SendRequest extends MmsRequest {
         if (recipientNumbers != null) {
             int nNumberCount = recipientNumbers.length;
             if (nNumberCount > 0) {
-                Phone phone = PhoneFactory.getDefaultPhone();
                 EncodedStringValue[] newNumbers = new EncodedStringValue[nNumberCount];
                 String toNumber;
                 String newToNumber;
                 for (int i = 0; i < nNumberCount; i++) {
                     toNumber = recipientNumbers[i].getString();
-                    newToNumber = SmsNumberUtils.filterDestAddr(phone, toNumber);
+                    newToNumber = SmsNumberUtils.filterDestAddr(mContext, mSubId, toNumber);
                     if (!TextUtils.equals(toNumber, newToNumber)) {
                         isUpdated = true;
                         newNumbers[i] = new EncodedStringValue(newToNumber);
